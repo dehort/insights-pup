@@ -6,7 +6,9 @@ import collections
 import json
 import aiohttp
 import watchtower
+import signal
 
+from time import sleep
 from tempfile import NamedTemporaryFile
 from aiohttp.client_exceptions import ClientConnectionError
 from logstash_formatter import LogstashFormatterV1
@@ -286,8 +288,28 @@ async def post_to_inventory(facts, msg):
                      extra={"request_id": post['payload_id'], "account": post["account"]})
         return {"error": "Unable to update inventory. Service unavailable"}
 
+async def shutdown(signal, loop):
+    logger.info("Recieved Exit Signal: %s", signal.name)
+    logger.info("Canceling Tasks")
+    tasks = [task for task in asyncio.Task.all_tasks() if task is not
+             asyncio.Task.current_task()]
+    try:
+        [task.cancel() for task in tasks]
+    except asyncio.CanceledError:
+        logging.info("Coroutine Cancelled")
+
+    logging.info("Canceling outstanding tasks")
+    asyncio.gather(*tasks)
+    loop.stop()
+    logging.info("Shutdown Complete")
+
 
 def main():
+    signals = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
+    for s in signals:
+        loop.add_signal_handler(
+            s, lambda s=s: loop.create_task(shutdown(s, loop)))
+
     try:
         mnm.start_http_server(port=9126)
         loop.set_default_executor(thread_pool_executor)
