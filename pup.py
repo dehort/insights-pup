@@ -8,7 +8,6 @@ import aiohttp
 import watchtower
 import signal
 
-from tempfile import NamedTemporaryFile
 from aiohttp.client_exceptions import ClientConnectionError
 from logstash_formatter import LogstashFormatterV1
 from concurrent.futures import ThreadPoolExecutor
@@ -139,6 +138,7 @@ def succeed_upload(data, response, extra):
     return data_to_produce
 
 
+@time(mnm.handle_file_time)
 async def handle_file(msgs):
     extra = get_extra()
     for msg in msgs:
@@ -212,8 +212,8 @@ def make_responder(queue=None):
             extra["account"] = msg["account"]
             extra["request_id"] = payload_id
             logger.info(
-                "Popped data from produce queue (qsize now: %d) for topic [%s], payload_id [%s]: %s",
-                len(queue), topic, payload_id, msg, extra=extra)
+                "Popped data from produce queue (qsize now: %d) for topic [%s], payload_id [%s]",
+                len(queue), topic, payload_id, extra=extra)
             try:
                 await client.send_and_wait(topic, json.dumps(msg).encode("utf-8"))
                 current_archives.remove(payload_id)
@@ -240,24 +240,14 @@ async def send_system_profile(client, item):
 @time(mnm.validation_time)
 async def validate(url, request_id, account):
     extra = get_extra(account, request_id)
-
-    def _write(filename, data):
-        with open(filename, "wb") as f:
-            f.write(data)
-
     try:
-        temp = NamedTemporaryFile(delete=False).name
-
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 data = await response.read()
-                await loop.run_in_executor(None, _write, temp, data)
-            await session.close()
-
-        return await loop.run_in_executor(fact_extraction_executor, extract_facts, temp, request_id, account, extra)
+                mnm.payload_size.observe(len(data))
+                return await loop.run_in_executor(fact_extraction_executor, extract_facts, data, request_id, account, extra)
     except Exception as e:
         logger.exception("Validation failure: %s", e, extra=extra)
-        os.remove(temp)
 
 
 @time(mnm.inventory_post_time)
